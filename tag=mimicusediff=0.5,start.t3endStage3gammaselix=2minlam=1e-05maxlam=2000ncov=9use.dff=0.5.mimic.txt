@@ -1,0 +1,233 @@
+library(latex2exp)
+library(kableExtra)
+library(xtable)
+
+# some useful functions
+source('utils.R')
+source('mc.utils.R')
+source('is.R')
+source('mimic.utils.R')
+
+# will just take eg first 300 episodes
+debug = 1
+
+# this tag changes path, careful
+tag = ""
+
+# where are episodes, made by data_clean.py, np_load.py
+stagesdirec = paste0("/stages",tag)
+
+# this tag just names output
+str.tag = "mimic"
+
+# miscellaneous arguments
+other.args=list(
+                logx=0,
+                gammaixleg=1,deltaixleg=1,area.plots=1.3,
+                plot.emp.var=1,
+                max.n.div=2,use.diff=.5)
+
+# threshold for considering equal to behavior
+use.diff = other.args$use.diff #1e-1
+
+# lambda grid
+min.lambda = 0.3
+max.lambda = 1.4#.02
+nlam = 10 #10#10
+lambdas= seq(min.lambda,max.lambda,length.out=nlam)
+
+if (debug){
+  other.args=list(#get.theor.var.of.ests=0,plot.adap.lasso.ci=0,
+    logx=0,
+    gammaixleg=1,deltaixleg=1,area.plots=1.3,
+    plot.emp.var=1,
+    max.n.div=2,use.diff=.5)
+  
+  
+    nlam = 2#5#3 #10#10
+  lambdas= exp(seq(log(1e-5),log(2000),length.out=nlam))
+  
+}
+
+nlam = length(lambdas)
+
+ncov = 9 # 8 is max
+# these are getting the correct stages, since we have some initial
+# stages that are like 40 seconds just to collect other measurements
+# from before episode starts
+
+start.t=3 # beginning of traj
+end.stage=3 # end of traj. we end early. so this is like first 30 min after hyp
+
+other.arg.str= paste0(paste0(names(other.args),"=",other.args),collapse = "")
+exp.tag = paste0("tag=",str.tag,"usediff=",use.diff,",start.t",start.t,"endStage",end.stage,"gammaselix=",
+                 nlam,"minlam=",min(lambdas),"maxlam=",max(lambdas),
+                 "ncov=",ncov,"use.dff=",use.diff)
+
+print("Need to make sure in proper directory!!!")
+
+# need to censor
+if(getwd()=="/Volumes/projects/Latentdir/relative_sparsity/code_betareg/mdp_Vonly"){
+  pth='/Users/anonymous/Box/MIMIC/mimic-iii-v1-4/hypotension-RL/model-data2'  
+}else{
+  print("stop")
+  browser()
+  pth='/scratch/sweisent/mimic'
+  
+  sink(file = paste0(exp.tag,".mimic.txt"), append = FALSE, 
+       type = c("output", "message"),split = FALSE)
+}
+
+writeLines(readLines("mimic.R"))
+
+# this is just an id for a unit test (checking that the data for this id is as expected).  
+# This is done with much more description
+# in the mimic.prelim.analysis.Rmd file, but we do it here just to be extra careful
+id.check = 52
+
+# read in stages
+filenames <- list.files(paste0(pth,stagesdirec), pattern="*.csv", full.names=TRUE)
+ldf <- lapply(filenames, read.csv)
+ldf = lapply(ldf,as.matrix)
+# note
+state.dim = dim(ldf[[1]])[2] #K
+nObs = dim(ldf[[1]])[1] #N
+
+# rewards, actions, times (times aren't used, but useful to know them)
+msr =  read.csv(paste0(pth,'/',tag,'multistage_rewards.csv'),header=TRUE, row.names = 1)
+msa =  read.csv(paste0(pth,'/',tag,'multistage_actions.csv'),header=TRUE, row.names = 1)
+mst =  read.csv(paste0(pth,'/',tag,'multistage_times.csv'),header=TRUE, row.names = 1)
+
+msr[id.check,]
+msa[id.check,]
+mst[id.check,] # note that these times correspond to the rewards and actions, not states
+
+
+for (i in start.t:end.stage){
+print(ldf[[i]][id.check,]['map'])
+}
+
+no.first = is.na(msa[,1])
+print("% without first (why are these occuring?)")
+sum(no.first)/length(no.first)*100
+
+misa = rep(0,length(msa[,1]))
+
+for (i in start.t:(end.stage)){
+  misa = misa + is.na(msa[,i])
+}
+
+is.misa=misa>0
+
+take = !is.misa 
+
+ixs = 1:dim(msa)[1]
+newixs = ixs[take]
+
+
+for (i in 1:length(ldf)){
+  print(dim(ldf[[i]]))
+}
+
+# just take decisions betwwen start.t and end.stage
+# starting at time start.t
+
+msr = msr[,start.t:(end.stage),drop=FALSE]
+msa = msa[,start.t:(end.stage),drop=FALSE]
+ldf = ldf[start.t:(end.stage)]
+mst = mst[,start.t:(end.stage),drop=FALSE]
+
+msr=msr[take,,drop=FALSE]
+msa = msa[take,,drop=FALSE]
+mst = mst[take,,drop=FALSE]
+ldf=lapply(ldf,function(x){x[take,,drop=FALSE]})
+
+png("stagesActRew.png",width=1000,height=dim(msr)[2]*1000,res=150)
+par(mfrow=c(dim(msr)[2],1))
+for (i in 1:dim(msr)[2]){
+  boxplot(msr[,i]~msa[,i],main=paste("stage",i),xlab="Action",ylab="Reward")
+}
+dev.off()
+
+
+#}
+
+id.check = which(newixs==id.check)
+# should be 53
+msr[id.check,]
+# should be 1
+msa[id.check,]
+
+# should be 0.5067
+mst[id.check,] # note that these times correspond to the rewards and actions, not states
+
+# should be 48
+for (i in 1:length(ldf)){
+  print(ldf[[i]][id.check,]['map'])
+}
+
+png("act.rew.over.time.png",width=1000,height=1000,res=150)
+avact = apply(msa,2,mean) 
+avre = apply(msr,2,mean)
+par(mfrow=c(2,1))
+plot(c(mst[1,]),avact,xlab="time (hrs)",ylab="prop. given vasos")
+plot(c(mst[1,]),avre,xlab="time (hrs)",ylab="avg reward")
+dev.off()
+
+# Joe’s paper  uses 9 variables, so we follow him. 
+#He uses MAP, heart rate, urine output, lactate, Glasgow coma score, 
+# serum creatinine, FiO2, total bilirubin, and platelet count. 
+
+cov.of.int = c("map","hr","urine","lactate","GCS","creatinine","fio2",
+               "bilirubin_total","platelets")#,"total_all_prev_fluids")#,"total_all_prev_vasos")#[1:ncov]
+
+ldf2=lapply(ldf,function(x){x[,cov.of.int,drop=FALSE]})
+
+renamed.cov.of.int  =  c("MAP","HR","urine","lactate","GCS","creatinine","Fio2",
+                 "bilirubin","platelets")#,"past fluids")#,"past vasos")[1:ncov]
+
+for (i in 1:length(ldf2)){
+  colnames(ldf2[[i]])= cov.of.int
+  
+}
+
+mseps = get.eps.ms(ldf2[[1]],msa,msr)
+
+check.pos(mseps,cov.of.int)
+
+##
+#browser()
+#mseps = sample(mseps)
+if (debug){
+  eps.mimic = mseps[1:300]
+}else{
+  eps.mimic=mseps #mseps#[1:1000]#halfds
+}
+
+
+sc=center.scale.s(eps.mimic)
+smm=sc$sm.cs
+
+png("ScaledCovHist.png",width=1000,height=length(cov.of.int)*1000,res=150)
+par(mfrow=c(length(cov.of.int),1))
+for (i in 1:length(cov.of.int)){
+  hist(smm[,i],main=paste(cov.of.int[i]))
+}
+dev.off()
+
+print("SET Sigmas to 1")
+
+
+scale.s = 1 # for real data, must scale
+# for mimic, b0 doesn't matter. only for coverage results
+
+ixs=select.and.est(eps.mimic,b0=rep(NA,dim(eps.mimic[[1]]$Ss)[1]),
+                   lambdas=lambdas,
+                   names=renamed.cov.of.int,
+                   resfile=paste0(exp.tag,"res"),
+                   plotfile=paste0(exp.tag,"grid.mimic.png"),
+                   scale.s=scale.s,
+                   use.diff=use.diff,other.args=other.args)
+
+
+
